@@ -2,7 +2,9 @@
 
 基于 [InvenTree](https://github.com/inventree/InvenTree) 的开箱即用库存管理系统，**集成钉钉群机器人**实现：
 <img width="1914" height="832" alt="image" src="https://github.com/user-attachments/assets/e3b0cb01-cf64-428f-81b7-e86a47b6cb9b" />
+<div align="center">
 <img width="315" height="425" alt="7c692b4501e95a6ec9ad1010a8848e81" src="https://github.com/user-attachments/assets/c59a4136-5a14-438b-ae59-0495c67c9a5e" />
+</div>
 
 
 - **实时事件推送** —— 库存变动 / 采购订单 / 销售订单 / 生产工单状态变更时自动告警
