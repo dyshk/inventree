@@ -72,38 +72,37 @@
 | 端口 | 80 / 443 未被占用（被占用改 `.env` 的 `INVENTREE_HTTP_PORT` / `INVENTREE_HTTPS_PORT`） |
 
 ---
-
 ## 快速开始
 
-```bash
 下载所有文件到文件夹，在文件夹中打开终端，按照安装.txt命令进行安装
----
+
+----------------------------------------------------------------------
 
 ## 详细部署步骤
 
-完整命令清单见 [安装.txt](安装.txt)，要点如下：
+完整命令清单见 安装.txt，要点如下：
 
-| Step | 操作 | 命令 |
-|------|------|------|
-| 0 | 改 `.env` 4 项 | 见 [配置文件说明](#配置文件-env-说明) |
-| 1 | 清理旧环境 | `docker compose down -v` |
-| 2 | 启动 db + cache | `docker compose up -d inventree-db inventree-cache` |
-| 3 | 数据库迁移 | `docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && python3 manage.py migrate --run-syncdb --traceback"` |
-| 4 | 收集静态 | `docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && python3 manage.py remove_stale_contenttypes --include-stale-apps --no-input 2>/dev/null; python3 manage.py collectstatic --noinput"` |
-| 5 | 创建管理员 | `docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && DJANGO_SUPERUSER_PASSWORD=$INVENTREE_ADMIN_PASSWORD python3 manage.py createsuperuser --noinput --username=$INVENTREE_ADMIN_USER --email=$INVENTREE_ADMIN_EMAIL"` |
-| 6 | 启动 server | `docker compose up -d inventree-server` 清一下 __pycache__ 避免旧代码缓存: `docker exec inventree-server rm -rf /home/inventree/data/plugins/inventree_dingtalk/__pycache__` |
-| 7 | 启动全部 | `docker compose restart inventree-server inventree-worker` |
-| 8 | 验证 | 浏览器访问： http://localhost |
+Step | 操作 | 命令
+-----|------|-----
+0 | 改 .env 4 项 | 见配置文件说明
+1 | 清理旧环境 | docker compose down -v
+2 | 启动 db + cache | docker compose up -d inventree-db inventree-cache
+3 | 数据库迁移 | docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && python3 manage.py migrate --run-syncdb --traceback"
+4 | 收集静态 | docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && python3 manage.py remove_stale_contenttypes --include-stale-apps --no-input 2>/dev/null; python3 manage.py collectstatic --noinput"
+5 | 创建管理员 | docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && DJANGO_SUPERUSER_PASSWORD=$INVENTREE_ADMIN_PASSWORD python3 manage.py createsuperuser --noinput --username=$INVENTREE_ADMIN_USER --email=$INVENTREE_ADMIN_EMAIL"
+6 | 启动 server | docker compose up -d inventree-server
+     清一下 __pycache__ 避免旧代码缓存: docker exec inventree-server rm -rf /home/inventree/data/plugins/inventree_dingtalk/__pycache__
+7 | 启动全部 | docker compose restart inventree-server inventree-worker
+8 | 验证 | 浏览器访问： http://localhost
 
-> **重要**：不要跑 `docker compose run --rm inventree-server invoke update`！
-> InvenTree stable 镜像内置 Python 3.14，`invoke` 库在 3.14 下有 `fcntl.ioctl` buffer overflow bug，会报 `SystemError: buffer overflow`。本项目用 `manage.py` 直接迁移已绕过此问题。
+重要：不要跑 docker compose run --rm inventree-server invoke update！
 
----
+InvenTree stable 镜像内置 Python 3.14，invoke 库在 3.14 下有 fcntl.ioctl buffer overflow bug，会报 SystemError: buffer overflow。本项目用 manage.py 直接迁移已绕过此问题。
+
+----------------------------------------------------------------------
 
 ## 项目结构
 
-
-```
 inventree/
 ├── .env                      # ★ 部署前改 4 项（必改）
 ├── .env.example              # .env 模板
@@ -121,9 +120,6 @@ inventree/
 │
 └── scripts/                  # 定时扫描脚本（bind mount 到容器）
     └── check_and_notify.py   # 批量检查库存 → 推钉钉
-```
-
-
 
 ## 钉钉预警使用
 
@@ -135,46 +131,43 @@ inventree/
 - 采购订单 / 销售订单 / 生产工单 状态变更
 - 新部件创建（可选，默认关）
 
-**后台开关**：InvenTree → 系统 → 插件 → DingTalk Notification
+后台开关：InvenTree → 系统 → 插件 → DingTalk Notification
 
-| 设置项 | 说明 | 默认 |
-|--------|------|------|
-| `DINGTALK_NOTIFY_LOW_STOCK` | 库存不足告警 | 开 |
-| `DINGTALK_NOTIFY_PO_STATUS` | 采购订单状态变更 | 开 |
-| `DINGTALK_NOTIFY_SO_STATUS` | 销售订单状态变更 | 开 |
-| `DINGTALK_NOTIFY_BUILD` | 生产工单状态变更 | 开 |
-| `DINGTALK_NOTIFY_PART_NEW` | 新部件创建 | 关 |
+设置项 | 说明 | 默认
+-------|------|------
+DINGTALK_NOTIFY_LOW_STOCK | 库存不足告警 | 开
+DINGTALK_NOTIFY_PO_STATUS | 采购订单状态变更 | 开
+DINGTALK_NOTIFY_SO_STATUS | 销售订单状态变更 | 开
+DINGTALK_NOTIFY_BUILD | 生产工单状态变更 | 开
+DINGTALK_NOTIFY_PART_NEW | 新部件创建 | 关
 
-Webhook 和 Secret 优先读后台设置，留空时回退读 `.env` 的 `DINGTALK_WEBHOOK` / `DINGTALK_SECRET`。
+Webhook 和 Secret 优先读后台设置，留空时回退读 .env 的 DINGTALK_WEBHOOK / DINGTALK_SECRET。
 
 ### 方式 B：定时脚本批量巡检（补充）
 
-扫描所有设置了 `minimum_stock` 的部件，低于阈值就告警，同一部件 24 小时内只告警一次（冷却机制，不刷屏）。
+扫描所有设置了 minimum_stock 的部件，低于阈值就告警，同一部件 24 小时内只告警一次（冷却机制，不刷屏）。
 
-```bash
 # 立即扫描告警（忽略冷却，用于手动测试）
 docker exec inventree-server python /home/inventree/data/scripts/check_and_notify.py --scan
 
 # 定时检查（受 24h 冷却限制，同一部件不重复告警）
 docker exec inventree-server python /home/inventree/data/scripts/check_and_notify.py
 
-# 仅扫描不发送（dry-run，看库存状态）
+# 仅扫描不发送（dry‑run，看库存状态）
 docker exec inventree-server python /home/inventree/data/scripts/check_and_notify.py --dry-run
-```
 
-**冷却文件**：容器内 `/home/inventree/data/plugins/_alert_cooldown.json`
-强制所有部件重新告警 → 删掉这个文件再跑 `--scan`。
+冷却文件：容器内 /home/inventree/data/plugins/_alert_cooldown.json
+
+强制所有部件重新告警 → 删掉这个文件再跑 --scan。
 
 ### 设置 Windows 定时任务
 
-1. `Win+R` → `taskschd.msc` → 创建任务
+1. Win+R → taskschd.msc → 创建任务
 2. 触发器：每天 / 每小时 / 自定义周期
-3. 操作：启动程序 `cmd.exe`
-   - 参数：`/c "docker exec inventree-server python /home/inventree/data/scripts/check_and_notify.py"`
+3. 操作：启动程序 cmd.exe
+   - 参数：/c "docker exec inventree-server python /home/inventree/data/scripts/check_and_notify.py"
    - 起始于：本文件夹路径
 4. 条件：取消勾选「只有在计算机使用交流电源时才启动」（让笔记本电池模式也能跑）
-
----
 
 ## 配置文件 .env 说明
 
