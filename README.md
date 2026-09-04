@@ -73,43 +73,13 @@
 
 ---
 
-## 快速开始（5 分钟）
+## 快速开始
 
 ```bash
-# 1. 克隆项目
-git clone <你的仓库地址> inventree
-cd inventree
-
-# 2. 复制 .env 模板，修改 4 项必填配置
-cp .env.example .env       # 见下方"配置文件说明"
-# 用记事本/编辑器改 .env 里 4 项：
-#   INVENTREE_SITE_URL / INVENTREE_ADMIN_PASSWORD
-#   DINGTALK_WEBHOOK / DINGTALK_SECRET
-
-# 3. 启动数据库和缓存，等待 healthy
-docker compose up -d inventree-db inventree-cache
-docker inspect --format "{{.State.Health.Status}}" inventree-db inventree-cache
-# 两个都显示 healthy 再继续
-
-# 4. 数据库迁移（绕过 invoke bug，直接用 manage.py）
-docker compose run --rm inventree-server bash -lc \
-  "cd /home/inventree/src/backend/InvenTree && python3 manage.py migrate --run-syncdb"
-
-# 5. 收集静态 + 创建管理员 + 启动全部服务
-docker compose run --rm inventree-server bash -lc \
-  "cd /home/inventree/src/backend/InvenTree && python3 manage.py collectstatic --noinput"
-docker compose run --rm inventree-server bash -lc \
-  "cd /home/inventree/src/backend/InvenTree && DJANGO_SUPERUSER_PASSWORD=$INVENTREE_ADMIN_PASSWORD python3 manage.py createsuperuser --noinput --username=$INVENTREE_ADMIN_USER --email=$INVENTREE_ADMIN_EMAIL"
-docker compose up -d
-
-# 6. 浏览器打开 http://localhost，用 .env 里的 admin 账号登录
-```
-
-> 全自动脚本（Windows）：见 [安装.txt](安装.txt) 的 Step 0–8，按顺序复制粘贴即可。
-
+下载所有文件到文件夹，在文件夹中打开终端，按照安装.txt命令进行安装
 ---
 
-## 详细部署步骤（Step 0–8）
+## 详细部署步骤
 
 完整命令清单见 [安装.txt](安装.txt)，要点如下：
 
@@ -118,12 +88,12 @@ docker compose up -d
 | 0 | 改 `.env` 4 项 | 见 [配置文件说明](#配置文件-env-说明) |
 | 1 | 清理旧环境 | `docker compose down -v` |
 | 2 | 启动 db + cache | `docker compose up -d inventree-db inventree-cache` |
-| 3 | 数据库迁移 | `docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && python3 manage.py migrate --run-syncdb"` |
-| 4 | 收集静态 | `docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && python3 manage.py collectstatic --noinput"` |
+| 3 | 数据库迁移 | `docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && python3 manage.py migrate --run-syncdb --traceback"` |
+| 4 | 收集静态 | `docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && python3 manage.py remove_stale_contenttypes --include-stale-apps --no-input 2>/dev/null; python3 manage.py collectstatic --noinput"` |
 | 5 | 创建管理员 | `docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && DJANGO_SUPERUSER_PASSWORD=$INVENTREE_ADMIN_PASSWORD python3 manage.py createsuperuser --noinput --username=$INVENTREE_ADMIN_USER --email=$INVENTREE_ADMIN_EMAIL"` |
-| 6 | 启动 server | `docker compose up -d inventree-server`（插件/脚本**自动挂载**，无需 `docker cp`） |
-| 7 | 启动全部 | `docker compose up -d inventree-server inventree-worker inventree-proxy` |
-| 8 | 验证 | `curl -s -o /dev/null -w "%{http_code}" http://localhost/login` 返回 200/302 即 OK |
+| 6 | 启动 server | `docker compose up -d inventree-server` 清一下 __pycache__ 避免旧代码缓存: `docker exec inventree-server rm -rf /home/inventree/data/plugins/inventree_dingtalk/__pycache__` |
+| 7 | 启动全部 | `docker compose restart inventree-server inventree-worker` |
+| 8 | 验证 | 浏览器访问： http://localhost |
 
 > **重要**：不要跑 `docker compose run --rm inventree-server invoke update`！
 > InvenTree stable 镜像内置 Python 3.14，`invoke` 库在 3.14 下有 `fcntl.ioctl` buffer overflow bug，会报 `SystemError: buffer overflow`。本项目用 `manage.py` 直接迁移已绕过此问题。
@@ -135,12 +105,12 @@ docker compose up -d
 ```
 inventree/
 ├── .env                      # ★ 部署前改 4 项（必改）
-├── .env.example              # .env 模板（不含敏感信息，可安全上传）
+├── .env.example              # .env 模板
 ├── .gitignore
 ├── docker-compose.yml        # 编排 5 个容器
 ├── Caddyfile                 # 反向代理配置
 ├── README.md                 # 本文件
-├── 安装.txt                  # 详细命令清单（手动部署）
+├── 安装.txt                  # 详细命令清单
 ├── 配置说明.txt              # 详细排障/维护说明
 │
 ├── plugins/                  # 钉钉插件（bind mount 到容器）
@@ -224,7 +194,7 @@ INVENTREE_SITE_URL=http://192.168.1.100
 
 ```env
 INVENTREE_ADMIN_USER=admin
-INVENTREE_ADMIN_PASSWORD=your_secure_password   # 至少 8 位
+INVENTREE_ADMIN_PASSWORD=your_secure_password
 INVENTREE_ADMIN_EMAIL=admin@localhost
 ```
 
@@ -235,16 +205,6 @@ INVENTREE_ADMIN_EMAIL=admin@localhost
 ```env
 DINGTALK_WEBHOOK=https://oapi.dingtalk.com/robot/send?access_token=xxxxx
 DINGTALK_SECRET=SECxxxxxxxxxxxxxxxxxxxxxxxx
-```
-
-### 完整 .env 模板
-
-见 [.env.example](.env.example)，复制后改 4 项即可。
-
-### 改完 .env 后让配置生效
-
-```bash
-docker compose up -d --force-recreate
 ```
 
 ---
@@ -375,7 +335,7 @@ docker compose restart inventree-server inventree-worker
 
 ### 部署文件迁移（项目代码）
 
-整个文件夹复制到新电脑 → 装 Docker → 改 `.env` 4 项 → 按 [快速开始](#快速开始5-分钟) 跑。
+整个文件夹复制到新电脑 → 装 Docker → 改 `.env` 4 项 → 按 [快速开始](#快速开始) 跑。
 
 ### 业务数据迁移（数据库）
 
