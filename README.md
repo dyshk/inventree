@@ -83,18 +83,16 @@
 完整命令清单见 安装.txt，要点如下：
 
 | Step | 操作 | 命令 |
-|-----|------|-----|
+|:-----|:-----|:-----|
 | 0 | 改 .env 4 项 | 见配置文件说明 |
 | 1 | 清理旧环境 | `docker compose down -v` |
 | 2 | 启动 db + cache | `docker compose up -d inventree-db inventree-cache` |
 | 3 | 数据库迁移 | `docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && python3 manage.py migrate --run-syncdb --traceback"` |
 | 4 | 收集静态 | `docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && python3 manage.py remove_stale_contenttypes --include-stale-apps --no-input 2>/dev/null; python3 manage.py collectstatic --noinput"` |
 | 5 | 创建管理员 | `docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && DJANGO_SUPERUSER_PASSWORD=$INVENTREE_ADMIN_PASSWORD python3 manage.py createsuperuser --noinput --username=$INVENTREE_ADMIN_USER --email=$INVENTREE_ADMIN_EMAIL"` |
-| 6 | 启动 server | `docker compose up -d inventree-server` |
+| 6 | 启动 server<br>清一下 __pycache__ 避免旧代码缓存 | `docker compose up -d inventree-server`<br>`docker exec inventree-server rm -rf /home/inventree/data/plugins/inventree_dingtalk/__pycache__` |
 | 7 | 启动全部 | `docker compose restart inventree-server inventree-worker` |
 | 8 | 验证 | 浏览器访问： http://localhost |
-
-清一下 __pycache__ 避免旧代码缓存: `docker exec inventree-server rm -rf /home/inventree/data/plugins/inventree_dingtalk/__pycache__`
 
 重要：不要跑 docker compose run --rm inventree-server invoke update！
 
@@ -126,51 +124,71 @@ inventree/
 
 ## 钉钉预警使用
 
+---
+
 ### 方式 A：插件实时推送（推荐，开箱即用）
 
 插件监听 InvenTree 事件并实时推送钉钉：
 
-- 库存变动（StockItem 创建/更新/删除）→ 检查是否低于最低阈值
-- 采购订单 / 销售订单 / 生产工单 状态变更
-- 新部件创建（可选，默认关）
+- **库存变动**（StockItem 创建 / 更新 / 删除）→ 自动检查是否低于最低阈值
+- **采购订单 / 销售订单 / 生产工单** 状态变更
+- **新部件创建**（可选，默认关闭）
 
-后台开关：InvenTree → 系统 → 插件 → DingTalk Notification
+> 后台开关入口：InvenTree → 系统 → 插件 → DingTalk Notification
 
-设置项 | 说明 | 默认
--------|------|------
-DINGTALK_NOTIFY_LOW_STOCK | 库存不足告警 | 开
-DINGTALK_NOTIFY_PO_STATUS | 采购订单状态变更 | 开
-DINGTALK_NOTIFY_SO_STATUS | 销售订单状态变更 | 开
-DINGTALK_NOTIFY_BUILD | 生产工单状态变更 | 开
-DINGTALK_NOTIFY_PART_NEW | 新部件创建 | 关
+| 设置项 | 说明 | 默认 |
+|:-------|:-----|:-----|
+| `DINGTALK_NOTIFY_LOW_STOCK` | 库存不足告警 | ✅ 开 |
+| `DINGTALK_NOTIFY_PO_STATUS` | 采购订单状态变更 | ✅ 开 |
+| `DINGTALK_NOTIFY_SO_STATUS` | 销售订单状态变更 | ✅ 开 |
+| `DINGTALK_NOTIFY_BUILD` | 生产工单状态变更 | ✅ 开 |
+| `DINGTALK_NOTIFY_PART_NEW` | 新部件创建通知 | ⬜ 关 |
 
-Webhook 和 Secret 优先读后台设置，留空时回退读 .env 的 DINGTALK_WEBHOOK / DINGTALK_SECRET。
+> **Webhook / Secret 优先级**：先读取插件后台设置；后台留空时自动回退到 `.env` 中的 `DINGTALK_WEBHOOK` / `DINGTALK_SECRET`。
+
+---
 
 ### 方式 B：定时脚本批量巡检（补充）
 
-扫描所有设置了 minimum_stock 的部件，低于阈值就告警，同一部件 24 小时内只告警一次（冷却机制，不刷屏）。
+扫描所有设置了 `minimum_stock` 的部件，低于阈值即推送告警；同一部件 **24 小时内只告警一次**（冷却机制，避免刷屏）。
 
-# 立即扫描告警（忽略冷却，用于手动测试）
+**立即扫描告警**（忽略冷却，用于手动测试）：
+
+```bash
 docker exec inventree-server python /home/inventree/data/scripts/check_and_notify.py --scan
+```
 
-# 定时检查（受 24h 冷却限制，同一部件不重复告警）
+**定时检查**（受 24h 冷却限制，同一部件不重复告警）：
+
+```bash
 docker exec inventree-server python /home/inventree/data/scripts/check_and_notify.py
+```
 
-# 仅扫描不发送（dry‑run，看库存状态）
+**仅扫描不发送**（dry-run，查看库存状态）：
+
+```bash
 docker exec inventree-server python /home/inventree/data/scripts/check_and_notify.py --dry-run
+```
 
-冷却文件：容器内 /home/inventree/data/plugins/_alert_cooldown.json
+> **冷却记录**：容器内 `/home/inventree/data/plugins/_alert_cooldown.json`
+> **强制所有部件重新告警**：删除上述冷却文件后，重新执行 `--scan`
 
-强制所有部件重新告警 → 删掉这个文件再跑 --scan。
+---
 
-### 设置 Windows 定时任务
+### 设置 Windows 定时任务（自动巡检）
 
-1. Win+R → taskschd.msc → 创建任务
-2. 触发器：每天 / 每小时 / 自定义周期
-3. 操作：启动程序 cmd.exe
-   - 参数：/c "docker exec inventree-server python /home/inventree/data/scripts/check_and_notify.py"
-   - 起始于：本文件夹路径
-4. 条件：取消勾选「只有在计算机使用交流电源时才启动」（让笔记本电池模式也能跑）
+让电脑按固定周期自动执行库存检查，无需手动运行命令：
+
+| 步骤 | 操作 |
+|:-----|:-----|
+| 1. 打开任务计划程序 | `Win + R` → 输入 `taskschd.msc` → 回车 |
+| 2. 创建任务 | 右侧点击「创建任务」（非「创建基本任务」） |
+| 3. 触发器 | 新建 → 按预定时间：每天 / 每小时 / 自定义周期 |
+| 4. 操作 | 新建 → 启动程序 → 程序或脚本填 `cmd.exe` |
+| 4.1 添加参数 | `/c "docker exec inventree-server python /home/inventree/data/scripts/check_and_notify.py"` |
+| 4.2 起始于 | 填本项目文件夹路径（可选） |
+| 5. 条件 | 取消勾选「只有在计算机使用交流电源时才启动」（笔记本电池模式下也能运行） |
+| 6. 验证 | 右键任务 → 运行，检查钉钉群是否收到消息 |
 
 ## 配置文件 .env 说明
 
