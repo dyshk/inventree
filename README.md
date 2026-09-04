@@ -82,18 +82,19 @@
 
 完整命令清单见 安装.txt，要点如下：
 
-Step | 操作 | 命令
------|------|-----
-0 | 改 .env 4 项 | 见配置文件说明
-1 | 清理旧环境 | docker compose down -v
-2 | 启动 db + cache | docker compose up -d inventree-db inventree-cache
-3 | 数据库迁移 | docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && python3 manage.py migrate --run-syncdb --traceback"
-4 | 收集静态 | docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && python3 manage.py remove_stale_contenttypes --include-stale-apps --no-input 2>/dev/null; python3 manage.py collectstatic --noinput"
-5 | 创建管理员 | docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && DJANGO_SUPERUSER_PASSWORD=$INVENTREE_ADMIN_PASSWORD python3 manage.py createsuperuser --noinput --username=$INVENTREE_ADMIN_USER --email=$INVENTREE_ADMIN_EMAIL"
-6 | 启动 server | docker compose up -d inventree-server
-     清一下 __pycache__ 避免旧代码缓存: docker exec inventree-server rm -rf /home/inventree/data/plugins/inventree_dingtalk/__pycache__
-7 | 启动全部 | docker compose restart inventree-server inventree-worker
-8 | 验证 | 浏览器访问： http://localhost
+| Step | 操作 | 命令 |
+|-----|------|-----|
+| 0 | 改 .env 4 项 | 见配置文件说明 |
+| 1 | 清理旧环境 | `docker compose down -v` |
+| 2 | 启动 db + cache | `docker compose up -d inventree-db inventree-cache` |
+| 3 | 数据库迁移 | `docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && python3 manage.py migrate --run-syncdb --traceback"` |
+| 4 | 收集静态 | `docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && python3 manage.py remove_stale_contenttypes --include-stale-apps --no-input 2>/dev/null; python3 manage.py collectstatic --noinput"` |
+| 5 | 创建管理员 | `docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && DJANGO_SUPERUSER_PASSWORD=$INVENTREE_ADMIN_PASSWORD python3 manage.py createsuperuser --noinput --username=$INVENTREE_ADMIN_USER --email=$INVENTREE_ADMIN_EMAIL"` |
+| 6 | 启动 server | `docker compose up -d inventree-server` |
+| 7 | 启动全部 | `docker compose restart inventree-server inventree-worker` |
+| 8 | 验证 | 浏览器访问： http://localhost |
+
+清一下 __pycache__ 避免旧代码缓存: `docker exec inventree-server rm -rf /home/inventree/data/plugins/inventree_dingtalk/__pycache__`
 
 重要：不要跑 docker compose run --rm inventree-server invoke update！
 
@@ -103,6 +104,7 @@ InvenTree stable 镜像内置 Python 3.14，invoke 库在 3.14 下有 fcntl.ioct
 
 ## 项目结构
 
+```
 inventree/
 ├── .env                      # ★ 部署前改 4 项（必改）
 ├── .env.example              # .env 模板
@@ -120,6 +122,7 @@ inventree/
 │
 └── scripts/                  # 定时扫描脚本（bind mount 到容器）
     └── check_and_notify.py   # 批量检查库存 → 推钉钉
+```
 
 ## 钉钉预警使用
 
