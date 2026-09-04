@@ -74,7 +74,8 @@
 ---
 ## 快速开始
 
-下载所有文件到文件夹，在文件夹中打开终端，按照安装.txt命令进行安装
+下载所有文件到文件夹，或下载inventree.zip并解压，在文件夹中打开终端
+直接按照详细部署步骤命令安装，或按照安装.txt命令进行安装
 
 ----------------------------------------------------------------------
 
@@ -90,7 +91,7 @@
 | 3 | 数据库迁移 | `docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && python3 manage.py migrate --run-syncdb --traceback"` |
 | 4 | 收集静态 | `docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && python3 manage.py remove_stale_contenttypes --include-stale-apps --no-input 2>/dev/null; python3 manage.py collectstatic --noinput"` |
 | 5 | 创建管理员 | `docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && DJANGO_SUPERUSER_PASSWORD=$INVENTREE_ADMIN_PASSWORD python3 manage.py createsuperuser --noinput --username=$INVENTREE_ADMIN_USER --email=$INVENTREE_ADMIN_EMAIL"` |
-| 6 | 启动 server<br>清一下 __pycache__ 避免旧代码缓存 | `docker compose up -d inventree-server`<br>`docker exec inventree-server rm -rf /home/inventree/data/plugins/inventree_dingtalk/__pycache__` |
+| 6 | 启动 server<br>清一下 __pycache__ 避免旧代码缓存 |命令1 `docker compose up -d inventree-server`<br>命令2`docker exec inventree-server rm -rf /home/inventree/data/plugins/inventree_dingtalk/__pycache__` |
 | 7 | 启动全部 | `docker compose restart inventree-server inventree-worker` |
 | 8 | 验证 | 浏览器访问： http://localhost |
 
