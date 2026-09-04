@@ -1,0 +1,308 @@
+================================================================
+  InvenTree + 钉钉库存预警  通用部署  配置说明
+================================================================
+
+本文件夹拷到任何 Windows 电脑上，装了 Docker Desktop 就能部署
+（唯一要改的是 .env 文件里的 4 个配置项）
+
+----------------------------------------------------------------
+  0. 环境要求（必看，少一个都跑不起来）
+----------------------------------------------------------------
+  操作系统: Windows 10 / 11  64 位
+  Docker Desktop: 最新版 (4.x)
+  Docker 内存: 4GB 以上  ← 非常重要！低于 4GB 数据库会频繁超时
+               （Docker Desktop → Settings → Resources → Memory）
+  磁盘: 至少预留 5GB（镜像 + 数据卷）
+  端口: 80 和 443 没被占用（被占用改 .env 里的 HTTP_PORT/HTTPS_PORT）
+
+----------------------------------------------------------------
+  1. 快速安装（5 步）
+----------------------------------------------------------------
+  Step 1: 启动 Docker Desktop，等右下角鲸鱼图标不转了再继续
+
+  Step 2: 打开本文件夹里的 .env 文件，改 4 项：
+
+    ① INVENTREE_SITE_URL=http://localhost
+       ↓
+       如果要让局域网其他电脑也能访问（推荐）：
+         PowerShell 里运行 ipconfig，找你的 IPv4 地址（比如 192.168.1.100）
+         改成 INVENTREE_SITE_URL=http://192.168.1.100
+       只在本机用就保持 localhost
+
+    ② INVENTREE_ADMIN_PASSWORD=admin123456
+       ↓
+       改成你自己的管理员密码（至少 8 位）
+
+    ③ DINGTALK_WEBHOOK=
+       ↓
+       钉钉群 → 群设置 → 智能群助手 → 添加机器人 → 自定义
+       安全设置选「加签」
+       复制 Webhook URL（以 https://oapi.dingtalk.com/... 开头）
+       粘到等号后面（不要加引号）
+
+    ④ DINGTALK_SECRET=
+       ↓
+       上一步加签设置里的「加签密钥」（以 SEC 开头）
+       粘到等号后面
+
+    其余配置项一律不动，注释里写了"别动"的就是别动
+
+  Step 3: 按照安装.txt部署，等待跑完（首次部署约 5-10 分钟）
+          脚本会自动完成：起库 → 迁移 → 建管理员 → 装插件 → 起服务
+
+  Step 4: 浏览器打开 .env 里配置的 INVENTREE_SITE_URL 地址
+          用 INVENTREE_ADMIN_USER / INVENTREE_ADMIN_PASSWORD 登录
+
+  Step 5: 进入 InvenTree 后台 → 系统 → 插件
+          应该能看到 DingTalk Notification 已注册并启用
+          （如果没看到，运行 docker compose restart inventree-server）
+
+----------------------------------------------------------------
+  2. 让局域网其他电脑能访问
+----------------------------------------------------------------
+  只要做两件事：
+
+  1) .env 里 INVENTREE_SITE_URL 改成 http://你的IP
+     （不改也行，setup.bat 会自动检测并提醒）
+
+  2) 确保 Windows 防火墙放行 80 端口
+     PowerShell 里运行：
+       netsh advfirewall firewall add rule name="InvenTree HTTP" dir=in action=allow protocol=TCP localport=80
+
+  如果 80 端口被 IIS 或 nginx 占用：
+    .env 里改 INVENTREE_HTTP_PORT=8080
+    访问地址改成 http://你的IP:8080
+    防火墙放行 8080 端口
+
+  部署完成后可验证：
+    另一台同局域网电脑浏览器打开 http://你的IP/
+    或 PowerShell: Invoke-WebRequest http://你的IP/api/system/health/
+
+----------------------------------------------------------------
+  3. 钉钉预警的两种触发方式
+----------------------------------------------------------------
+
+  方式 A：插件实时推送（推荐，开箱即用）
+  -------------------------------------------------------
+  插件监听 InvenTree 的事件：
+    - 库存变动（StockItem 创建/更新/删除）→ 检查是否低于最低阈值
+    - 采购订单状态变更
+    - 销售订单状态变更
+    - 生产工单状态变更
+  这些事件发生时自动推送到钉钉
+
+  插件设置在 InvenTree 后台「系统 → 插件」里可以开关：
+    DINGTALK_NOTIFY_LOW_STOCK   库存不足（默认开）
+    DINGTALK_NOTIFY_PO_STATUS   采购订单（默认开）
+    DINGTALK_NOTIFY_SO_STATUS   销售订单（默认开）
+    DINGTALK_NOTIFY_BUILD       生产工单（默认开）
+    DINGTALK_NOTIFY_PART_NEW    新部件创建（默认关）
+
+  插件 Webhook 和 Secret 优先读后台设置；
+  后台留空时回退读 .env 里的 DINGTALK_WEBHOOK / DINGTALK_SECRET
+  （一般不用在后台再填一次，改 .env 就行）
+
+  方式 B：定时脚本批量检查（补充，用于定时巡检）
+  -------------------------------------------------------
+  脚本会扫描所有设置了 minimum_stock 的部件，低于阈值就告警
+  同一部件 24 小时内只告警一次（冷却机制，不刷屏）
+
+  手动运行（立即扫描告警，忽略冷却）：
+    docker exec inventree-server python /home/inventree/data/scripts/check_and_notify.py --scan
+
+  定时运行（受冷却限制，24h 内不重复告警）：
+    docker exec inventree-server python /home/inventree/data/scripts/check_and_notify.py
+
+  仅查看不发送（dry-run）：
+    docker exec inventree-server python /home/inventree/data/scripts/check_and_notify.py --dry-run
+
+  冷却记录文件在容器内：/home/inventree/data/plugins/_alert_cooldown.json
+  想强制对所有部件重新告警，删掉这个文件即可
+
+----------------------------------------------------------------
+  4. 设置定时自动告警（Windows 任务计划程序）
+----------------------------------------------------------------
+  让电脑每隔一段时间自动检查库存，不需要手动跑
+
+  Step 1: Win+R → taskschd.msc → 右侧「创建任务」（基本任务也可以）
+
+  Step 2: 触发器 → 新建
+    开始任务：按预定时间
+    每天 / 每小时 / 自定义周期（比如每天 09:00 和 18:00）
+
+  Step 3: 操作 → 新建
+    操作：启动程序
+    程序或脚本：cmd.exe
+    添加参数：/c "docker exec inventree-server python /home/inventree/data/scripts/check_and_notify.py"
+    起始于（可选）：你的本文件夹路径
+
+  Step 4: 条件 → 取消勾选「只有在计算机使用交流电源时才启动」
+          这样笔记本电池模式也能跑
+
+  Step 5: 确定。第一次可以右键任务→运行 测试一下
+
+  验证：手动 docker exec 那台电脑的 cmd 窗口应该没有"不是内部或外部命令"
+        说明 docker 在系统 PATH 里，任务计划也能调起
+
+----------------------------------------------------------------
+  5. 日常运维命令
+----------------------------------------------------------------
+  所有命令在本文件夹目录下运行（因为 docker compose 需要 .env 和 yml）
+
+  启动全部服务:
+    docker compose up -d
+
+  停止全部服务:
+    docker compose down
+
+  重启某个服务（比如改了配置要让它生效）:
+    docker compose restart inventree-server
+
+  查看实时日志（按 Ctrl+C 退出）:
+    docker compose logs -f
+
+  只看 server 的错误日志:
+    docker compose logs inventree-server 2>&1 | findstr /i "error exception"
+
+  查看各容器状态:
+    docker ps
+
+  进入容器 shell（调试用）:
+    docker exec -it inventree-server bash
+
+  彻底重置（清空数据库和插件，重头部署）:
+    docker compose down -v
+    然后重新双击 setup.bat
+
+  修改了 .env 后让配置生效:
+    docker compose up -d --force-recreate
+
+  修改了钉钉配置后让插件生效:
+    docker compose restart inventree-server
+
+----------------------------------------------------------------
+  6. 改了钉钉 Webhook 怎么让插件生效
+----------------------------------------------------------------
+  情况：部署完成后想换钉钉机器人
+
+  步骤：
+    1) 改 .env 里的 DINGTALK_WEBHOOK 和 DINGTALK_SECRET
+    2) 运行: docker compose restart inventree-server
+    3) 也可以在 InvenTree 后台「系统 → 插件 → DingTalk Notification」
+       直接改 Webhook 和 Secret（留空就是读 .env）
+
+  测试钉钉是否通：
+    docker exec inventree-server python /home/inventree/data/scripts/check_and_notify.py --scan
+    如果钉钉群收到「库存不足告警」消息 → 通了
+
+----------------------------------------------------------------
+  7. 常见问题排障
+----------------------------------------------------------------
+
+  ┌── Q1: docker compose run --rm inventree-server invoke update
+  │       报 SystemError: buffer overflow ───────────────────────┐
+  │                                                              │
+  │  根因：InvenTree stable 镜像内置 Python 3.14，               │
+  │  invoke 库用 fcntl.ioctl(FIONREAD) 检测终端输入，            │
+  │  Python 3.14 严格校验 buffer 大小，2 字节 buffer 被拒绝      │
+  │                                                              │
+  │  处理：**不要跑 invoke update**，直接用 setup.bat            │
+  │  脚本已经绕过了 invoke，用 manage.py 直接迁移                │
+  │                                                              │
+  └──────────────────────────────────────────────────────────────┘
+
+  ┌── Q2: 网页打开很慢 / 登录 502 / 经常断开 ────────────────────┐
+  │                                                              │
+  │  根因 99% 是 Docker Desktop 内存不足 4GB                     │
+  │  症状：docker ps 看到 db/cache 反复变 unhealthy               │
+  │       （healthcheck 的 exit code 是 -1）                     │
+  │                                                              │
+  │  处理：                                                      │
+  │  1) Docker Desktop → Settings → Resources                    │
+  │     Memory 调到 4GB 以上（建议 6GB 如果有富余）              │
+  │  2) 重新启动 Docker Desktop                                  │
+  │  3) 运行 docker compose up -d 让不健康的容器恢复             │
+  │                                                              │
+  └──────────────────────────────────────────────────────────────┘
+
+  ┌── Q3: admin/admin123456 登录提示 502 ───────────────────────┐
+  │                                                              │
+  │  先看 docker ps 确认 db 是否 healthy                         │
+  │  如果 db unhealthy，按 Q3 处理                               │
+  │  如果 db healthy，检查 gunicorn 是否在跑：                    │
+  │    docker compose logs inventree-server 2>&1 | findstr /i "listen error" │
+  │  端口冲突就改 .env 的 HTTP_PORT                               │
+  │                                                              │
+  └──────────────────────────────────────────────────────────────┘
+
+  ┌── Q4: 钉钉没收到消息 ───────────────────────────────────────┐
+  │                                                              │
+  │  1) 先确认 .env 里 DINGTALK_WEBHOOK 和 DINGTALK_SECRET 不为空│
+  │  2) 改完 .env 要: docker compose restart inventree-server    │
+  │  3) 测试脚本:                                                │
+  │     docker exec inventree-server python /home/inventree/data/│
+  │       scripts/check_and_notify.py --scan                      │
+  │     看输出有没有"发送成功"                                    │
+  │  4) 查钉钉群机器人日志：群设置 → 智能群助手 → 机器人 → 日志  │
+  │     看请求有没有打过来，返回的错误码是什么                    │
+  │  5) 如果脚本和插件都不发消息，可能是网络问题                   │
+  │     容器里能上网吗？测试：                                    │
+  │     docker exec inventree-server curl -s https://oapi.dingtalk.com/ │
+  │                                                              │
+  └──────────────────────────────────────────────────────────────┘
+
+  ┌── Q5: 插件在后台"系统→插件"里看不到 ────────────────────────┐
+  │                                                              │
+  │  ★ plugins/ 已通过 bind mount 自动挂载到容器，无需 docker cp  │
+  │                                                              │
+  │  1) 确认 bind mount 已挂载：                                  │
+  │     docker exec inventree-server ls /home/inventree/data/plugins/ │
+  │     应该看到 inventree_dingtalk 目录                         │
+  │     （看不到说明 docker-compose.yml 没生效，跑                │
+  │       docker compose up -d --force-recreate）                 │
+  │  2) 删掉 __pycache__:                                        │
+  │     docker exec inventree-server rm -rf /home/inventree/data/│
+  │       plugins/inventree_dingtalk/__pycache__                 │
+  │  3) 重启 server 和 worker:                                   │
+  │     docker compose restart inventree-server inventree-worker │
+  │                                                              │
+  └──────────────────────────────────────────────────────────────┘
+
+  ┌── Q6: 彻底换一台电脑重新部署 ───────────────────────────────┐
+  │                                                              │
+  │  1) 把整个文件夹复制过去                                     │
+  │  2) 装 Docker Desktop，内存调 4GB+                           │
+  │  3) 改 .env 里的 INVENTREE_SITE_URL / ADMIN_PASSWORD /      │
+  │     DINGTALK_WEBHOOK / DINGTALK_SECRET                      │
+  │  4) 双击 setup.bat                                          │
+  │                                                              │
+  │  注意：数据不会跟着文件夹走。                                 │
+  │  数据库存在 Docker 的 named volume 里，不会复制到文件夹里。   │
+  │  要迁移数据得用 InvenTree 的备份导出功能：                    │
+  │    旧电脑后台 → 系统 → 数据导入导出 → 备份                   │
+  │    新电脑后台 → 系统 → 数据导入导出 → 导入                   │
+  │                                                              │
+  └──────────────────────────────────────────────────────────────┘
+
+----------------------------------------------------------------
+  8. 本文件夹文件清单
+----------------------------------------------------------------
+  .env                → 核心配置（部署前改这个）
+  docker-compose.yml  → 编排 5 个容器（别动）
+  Caddyfile           → 反向代理配置（别动）
+  配置说明.txt        → 本文件
+
+  plugins/
+    inventree_dingtalk/
+      __init__.py           → 插件入口
+      InvenTreeDingTalk.py  → 插件主逻辑（监听事件→推钉钉）
+
+  scripts/
+    check_and_notify.py     → 定时扫描脚本（批量检查库存→推钉钉）
+
+  注意：plugins/ 和 scripts/ 已通过 bind mount 自动挂载到容器
+  （docker-compose.yml 里 ./scripts 和 ./plugins 卷映射）。
+  修改本地插件代码后只需重启 server/worker 立即生效；
+  修改本地脚本代码后无需任何操作，下次执行即用新代码。
+
+================================================================

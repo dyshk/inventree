@@ -1,0 +1,183 @@
+# ============================================================
+# InvenTree Docker Compose 编排文件（通用版）
+# ------------------------------------------------------------
+# 设计原则：
+#   1. 数据/数据库用 named volume，插件/脚本用 bind mount
+#      → 数据不污染项目目录，但插件/脚本代码自动注入容器
+#      → 换任何电脑、放任何目录（含空格、中文路径）都能正常工作
+#      → 改本地 plugins/ 或 scripts/ 下代码 → 重启容器立即生效，无需 docker cp
+#   2. 数据库容器带 health check
+#      → server 启动前确保数据库已 ready，避免迁移时卡住
+#   3. 插件/脚本通过 bind mount 自动挂载（无需手动 docker cp）
+#   4. 修改配置改 .env 文件，不要改本文件
+#
+# 自动做的事（通用适配任何电脑）：
+#   - init-csrf 服务在 server 启动前自动给 config.yaml 追加
+#     csrf_trusted_origins（localhost + 127.0.0.1 + SITE_URL）
+#   - server 的 INVENTREE_ALLOWED_HOSTS="*" 允许任何 IP 访问
+#   - Caddyfile 纯 reverse_proxy，Django whitenoise 直接 serve 静态
+#   - ./scripts 和 ./plugins 自动挂载到容器，钉钉插件和预警脚本开箱即用
+# ============================================================
+
+services:
+    # --------------------------------------------------------
+    # 数据库服务（PostgreSQL 17）
+    # --------------------------------------------------------
+    inventree-db:
+        image: postgres:17
+        container_name: inventree-db
+        expose:
+            - ${INVENTREE_DB_PORT:-5432}/tcp
+        environment:
+            - PGDATA=/var/lib/postgresql/data/pgdb
+            - POSTGRES_USER=${INVENTREE_DB_USER:?You must provide the 'INVENTREE_DB_USER' variable in the .env file}
+            - POSTGRES_PASSWORD=${INVENTREE_DB_PASSWORD:?You must provide the 'INVENTREE_DB_PASSWORD' variable in the .env file}
+            - POSTGRES_DB=${INVENTREE_DB_NAME:?You must provide the 'INVENTREE_DB_NAME' variable in the .env file}
+        volumes:
+            - inventree-data:/var/lib/postgresql/data
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U ${INVENTREE_DB_USER:-inventree_db_user} -d ${INVENTREE_DB_NAME:-inventree}"]
+            interval: 5s
+            timeout: 5s
+            retries: 30
+            start_period: 10s
+        restart: unless-stopped
+
+    # --------------------------------------------------------
+    # Redis 缓存服务
+    # --------------------------------------------------------
+    inventree-cache:
+        image: redis:7-alpine
+        container_name: inventree-cache
+        command: redis-server --save "" --appendonly no
+        env_file:
+            - .env
+        expose:
+            - ${INVENTREE_CACHE_PORT:-6379}
+        volumes:
+            - inventree-data:/data
+        healthcheck:
+            test: ["CMD", "redis-cli", "ping"]
+            interval: 5s
+            timeout: 3s
+            retries: 10
+            start_period: 5s
+        restart: always
+
+    # --------------------------------------------------------
+    # ★ 一次性 CSRF 配置注入（通用适配）
+    #   在 server 启动前自动给 config.yaml 追加 csrf_trusted_origins
+    #   只在 config.yaml 里没有该字段时才追加（幂等，可反复跑）
+    # --------------------------------------------------------
+    init-csrf:
+        image: inventree/inventree:${INVENTREE_TAG:-stable}
+        container_name: inventree-init-csrf
+        depends_on:
+            inventree-db:
+                condition: service_healthy
+            inventree-cache:
+                condition: service_healthy
+        env_file:
+            - .env
+        volumes:
+            - inventree-data:/home/inventree/data
+        # 单行脚本：检查 config.yaml，没有 csrf_trusted_origins 就追加
+        command:
+            - sh
+            - -c
+            - |
+              CFG=/home/inventree/data/config.yaml;
+              if ! grep -q '^csrf_trusted_origins:' $$CFG 2>/dev/null; then
+                {
+                  echo "";
+                  echo "# Auto-added by init-csrf (universal config)";
+                  echo "csrf_trusted_origins:";
+                  echo "  - http://localhost";
+                  echo "  - http://127.0.0.1";
+                  [ -n "$$INVENTREE_SITE_URL" ] && echo "  - $$INVENTREE_SITE_URL";
+                } >> $$CFG;
+                echo "[init-csrf] Added csrf_trusted_origins to config.yaml";
+              else
+                echo "[init-csrf] csrf_trusted_origins already exists, skipping";
+              fi;
+              exit 0
+
+    # --------------------------------------------------------
+    # InvenTree Web 服务器（gunicorn）
+    # ★ 不覆盖 command！让镜像默认 entrypoint 正常工作
+    # ★ 通用型挂载：scripts 和 plugins 用 bind mount 自动注入
+    #   - 换任何电脑/任何目录部署都无需手动 docker cp
+    #   - 改本地插件/脚本代码后重启容器立即生效
+    # --------------------------------------------------------
+    inventree-server:
+        image: inventree/inventree:${INVENTREE_TAG:-stable}
+        container_name: inventree-server
+        expose:
+            - ${INVENTREE_WEB_PORT:-8000}
+        depends_on:
+            inventree-db:
+                condition: service_healthy
+            inventree-cache:
+                condition: service_healthy
+            init-csrf:
+                condition: service_completed_successfully
+        env_file:
+            - .env
+        environment:
+            # 允许任意主机头（通用型，任何电脑/IP都能访问）
+            INVENTREE_ALLOWED_HOSTS: "*"
+        volumes:
+            - inventree-data:/home/inventree/data
+            # ★ 通用型 bind mount（相对路径，自动适配任何部署目录）
+            # scripts 只读：脚本本身不写文件
+            - ./scripts:/home/inventree/data/scripts:ro
+            # plugins 读写：_alert_cooldown.json 冷却记录需要写入
+            - ./plugins:/home/inventree/data/plugins
+        restart: unless-stopped
+
+    # --------------------------------------------------------
+    # InvenTree 后台任务处理（django-q worker）
+    # ★ 同 server 一样挂载 scripts/plugins，保证 worker 也能加载插件
+    # --------------------------------------------------------
+    inventree-worker:
+        image: inventree/inventree:${INVENTREE_TAG:-stable}
+        container_name: inventree-worker
+        command: invoke worker
+        depends_on:
+            inventree-db:
+                condition: service_healthy
+            inventree-cache:
+                condition: service_healthy
+            init-csrf:
+                condition: service_completed_successfully
+        env_file:
+            - .env
+        environment:
+            INVENTREE_ALLOWED_HOSTS: "*"
+        volumes:
+            - inventree-data:/home/inventree/data
+            # ★ 通用型 bind mount（与 server 保持一致）
+            - ./scripts:/home/inventree/data/scripts:ro
+            - ./plugins:/home/inventree/data/plugins
+        restart: unless-stopped
+
+    # --------------------------------------------------------
+    # Caddy 反向代理（纯 reverse_proxy，Django whitenoise serve 静态）
+    # --------------------------------------------------------
+    inventree-proxy:
+        container_name: inventree-proxy
+        image: caddy:alpine
+        restart: always
+        depends_on:
+            - inventree-server
+        ports:
+            - ${INVENTREE_HTTP_PORT:-80}:80
+            - ${INVENTREE_HTTPS_PORT:-443}:443
+        env_file:
+            - .env
+        volumes:
+            - ./Caddyfile:/etc/caddy/Caddyfile:ro
+            - inventree-data:/var/www
+
+volumes:
+    inventree-data:

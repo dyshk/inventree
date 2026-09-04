@@ -1,0 +1,360 @@
+================================================================
+  InvenTree + 钉钉库存预警  通用部署手动命令清单
+================================================================
+
+  适用环境: Windows 10/11 64 位 + Docker Desktop (内存 ≥4GB)
+  涉及版本:
+    InvenTree:     docker.io/inventree/inventree:stable
+                  (commit f15e35c, 2026-08-25)
+    Python:        3.14.7 (镜像内置)
+    PostgreSQL:    17
+    Redis:         7-alpine
+    Caddy:         alpine (反向代理)
+
+  使用方法:
+    1) 启动 Docker Desktop，等右下角鲸鱼图标稳定
+    2) 打开 cmd（不是 PowerShell），cd 进入本文件夹
+    3) 按下面 Step 顺序复制粘贴命令，每条跑完再跑下一条
+
+  ⚠️ 关键说明:
+    - 不要跑 "docker compose run --rm inventree-server invoke update"
+      原因: invoke 库在 Python 3.14 下有 fcntl.ioctl buffer overflow bug
+      表现: SystemError: buffer overflow / 网页打不开
+      解决: 直接用 manage.py 完成迁移（下面 Step 2）
+    - 改完 .env 必须重建容器配置:
+      docker compose up -d --force-recreate
+    - 每次粘贴的命令都是单行，完整复制，不要换行截断
+
+================================================================
+
+
+Step 0. 先改 .env 文件（4 项必改）
+----------------------------------------------------------------
+  用记事本打开本文件夹 .env，改下面 4 项:
+
+    ① INVENTREE_SITE_URL
+       只在本机用:       http://localhost
+       局域网其他电脑访问: http://192.168.x.x  (ipconfig 查本机 IP)
+
+    ② INVENTREE_ADMIN_PASSWORD
+       改成你自己的管理员密码（至少 8 位）
+
+    ③ DINGTALK_WEBHOOK
+       钉钉群 → 群设置 → 智能群助手 → 添加机器人 → 自定义
+       复制 Webhook URL 粘到等号后面（不要加引号）
+
+    ④ DINGTALK_SECRET
+       上一步加签设置里的「加签密钥」（以 SEC 开头）粘到等号后面
+
+  其余配置一律不动。
+
+
+Step 1. 彻底清理旧环境（全新部署必做）
+----------------------------------------------------------------
+  确保没有残留容器/卷影响新部署:
+
+docker compose down -v
+
+  如果容器已不存在也会报错，忽略即可。
+
+
+Step 2. 启动数据库和缓存，等待健康
+----------------------------------------------------------------
+docker compose up -d inventree-db inventree-cache
+
+  等待 15-30 秒，然后跑下面这条（看到 healthy 就 OK）:
+
+docker inspect --format "{{.State.Health.Status}}" inventree-db inventree-cache
+
+  两个都显示 healthy 再继续下一步。
+  如果超过 3 分钟还没 healthy:
+    → 检查 Docker Desktop 内存是否 ≥4GB (Settings → Resources)
+    → 杀毒软件把 Docker Desktop 加白名单
+    → docker compose logs inventree-db 看报错
+
+
+Step 3. 运行数据库迁移（关键！绕过 invoke bug）
+----------------------------------------------------------------
+  直接调用 manage.py，不走 invoke:
+
+docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && python3 manage.py migrate --run-syncdb --traceback"
+
+  看到最后的 "Applying ... OK" 就成功。
+  不要跑 invoke update！
+
+
+Step 4. 清理 + 收集静态文件
+----------------------------------------------------------------
+docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && python3 manage.py remove_stale_contenttypes --include-stale-apps --no-input 2>/dev/null; python3 manage.py collectstatic --noinput"
+
+
+Step 5. 创建管理员账号
+----------------------------------------------------------------
+  （如果 .env 里改了 INVENTREE_ADMIN_USER / PASSWORD，这里会用新值）
+
+docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && DJANGO_SUPERUSER_PASSWORD=$INVENTREE_ADMIN_PASSWORD python3 manage.py createsuperuser --noinput --username=$INVENTREE_ADMIN_USER --email=$INVENTREE_ADMIN_EMAIL"
+
+  看到 "Superuser created successfully" 就是成功。
+  如果报 "That username is already taken" 说明之前已创建，跳过即可。
+  忘了密码用这条重置:
+docker exec inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && python3 manage.py changepassword $INVENTREE_ADMIN_USER"
+
+
+Step 6. 钉钉插件和预警脚本（自动挂载，无需手动复制）
+----------------------------------------------------------------
+  ★ docker-compose.yml 已配置 bind mount：
+    - ./scripts    → /home/inventree/data/scripts   (只读)
+    - ./plugins    → /home/inventree/data/plugins   (读写)
+  插件和脚本会随容器启动自动挂载，无需 docker cp！
+
+  先让 server 容器启动起来（init-csrf 会先自动跑）:
+
+  docker compose up -d inventree-server
+
+  等 5 秒，验证插件和脚本已自动挂载:
+
+  docker exec inventree-server ls /home/inventree/data/scripts/
+    → 应看到 check_and_notify.py
+  docker exec inventree-server ls /home/inventree/data/plugins/inventree_dingtalk/
+    → 应看到 InvenTreeDingTalk.py 和 __init__.py
+
+  （可选）如果之前手动 docker cp 过旧代码，清一下 __pycache__:
+
+  docker exec inventree-server rm -rf /home/inventree/data/plugins/inventree_dingtalk/__pycache__
+
+
+Step 7. 启动全部服务
+----------------------------------------------------------------
+docker compose up -d inventree-server inventree-worker inventree-proxy
+
+  重启 server 和 worker 让插件加载:
+
+docker compose restart inventree-server inventree-worker
+
+
+Step 8. 等待 Web 就绪 + 验证
+----------------------------------------------------------------
+  等 15-40 秒，然后浏览器打开你在 .env 里配的 INVENTREE_SITE_URL
+
+  也可以 cmd 里测:
+
+  curl.exe -s -o nul -w "%{http_code}" http://localhost/login
+
+  返回 200 或 302 就 OK。
+
+  ---- 登录测试 ----
+  浏览器打开 http://localhost 或你配置的 IP
+  用 .env 里的 INVENTREE_ADMIN_USER / INVENTREE_ADMIN_PASSWORD 登录
+
+  如果登录提示 502/403/CSRF 错误:
+    → 见下方「常见问题」第 1 条
+
+  如果网页白屏 / "no response from server":
+    → 见下方「常见问题」第 2 条
+
+
+================================================================
+  钉钉预警使用
+================================================================
+
+  测试钉钉是否通（立即扫描告警，忽略冷却）:
+    docker exec inventree-server python /home/inventree/data/scripts/check_and_notify.py --scan
+
+  定时检查（受 24h 冷却限制，同一部件不重复告警）:
+    docker exec inventree-server python /home/inventree/data/scripts/check_and_notify.py
+
+  仅查看不发送（dry-run）:
+    docker exec inventree-server python /home/inventree/data/scripts/check_and_notify.py --dry-run
+
+  冷却文件: /home/inventree/data/plugins/_alert_cooldown.json
+  想强制所有部件重新告警 → 删掉这个文件再跑 --scan
+
+  ---- Windows 任务计划定时自动告警 ----
+  1) Win+R → taskschd.msc → 右侧「创建任务」
+  2) 触发器 → 每天 / 每小时 / 自定义周期
+  3) 操作 → 启动程序 → cmd.exe
+     添加参数: /c "docker exec inventree-server python /home/inventree/data/scripts/check_and_notify.py"
+  4) 条件 → 取消「只有在计算机使用交流电源时才启动」
+  5) 确定。第一次右键任务→运行测试
+
+
+================================================================
+  改了配置后怎么让它生效
+================================================================
+
+  改了 .env（如钉钉 webhook / 端口 / SITE_URL）:
+    docker compose up -d --force-recreate
+
+  改了插件 Python 代码（本地 plugins\ 里改了文件）:
+    ★ bind mount 已生效，无需 docker cp！
+    docker exec inventree-server rm -rf /home/inventree/data/plugins/inventree_dingtalk/__pycache__
+    docker compose restart inventree-server inventree-worker
+
+  改了脚本（本地 scripts\check_and_notify.py）:
+    ★ bind mount 已生效，改完立即生效，无需任何操作！
+    （下次 docker exec ... python check_and_notify.py 自动用新代码）
+
+
+================================================================
+  常用运维命令
+================================================================
+
+  查看所有容器状态:
+    docker ps
+
+  看实时日志:
+    docker compose logs -f
+
+  只看 server 错误:
+    docker compose logs inventree-server 2>&1 | findstr /i "error exception"
+
+  看某个服务单独日志:
+    docker compose logs inventree-server --tail 50
+
+  重启某个服务:
+    docker compose restart inventree-server
+
+  停止全部:
+    docker compose down
+
+  进入 server 容器（调试用）:
+    docker exec -it inventree-server bash
+
+  彻底清空（重头来）:
+    docker compose down -v
+
+
+================================================================
+  常见问题
+================================================================
+
+  Q1: 登录时 POST /login 返回 403 "CSRF verification failed"
+  ----------------------------------------------------------------
+  ★ 本项目已内置通用 CSRF 配置（init-csrf 服务自动注入）！
+
+  启动时 init-csrf 容器会先跑完，自动往 config.yaml 追加:
+    csrf_trusted_origins:
+      - http://localhost
+      - http://127.0.0.1
+      - http://你的 INVENTREE_SITE_URL 值
+
+  同时 INVENTREE_ALLOWED_HOSTS="*" 允许任何 IP 访问。
+  换任何电脑、用任何 IP 都不会再触发 CSRF 403。
+
+  如果仍然出现（旧 volume 残留），强制重建:
+    docker compose down -v
+    docker compose up -d
+
+  Q2: 网页白屏 / "no response from server"
+  ----------------------------------------------------------------
+  99% 是 docker Desktop 内存不足 4GB 导致 db/cache 变 unhealthy
+
+  处理:
+    1) Docker Desktop → Settings → Resources → Memory 调到 4GB+
+    2) 重启 Docker Desktop
+    3) 等 1 分钟后:
+       docker compose up -d
+    4) 如果还不行:
+       docker compose logs inventree-server --tail 30
+
+  Q3: 想同时支持 localhost + 多个局域网 IP 访问（通用 CSRF）
+  ----------------------------------------------------------------
+  ★ 本项目已内置通用 CSRF 配置，init-csrf 服务自动处理！
+
+  启动时 init-csrf 容器先跑完，自动追加:
+    csrf_trusted_origins:
+      - http://localhost
+      - http://127.0.0.1
+      - http://INVENTREE_SITE_URL 的值
+
+  同时 server 设置 INVENTREE_ALLOWED_HOSTS="*"。
+  任何电脑、任何 IP 访问都不会触发 CSRF 403 或 ALLOWED_HOSTS 报错。
+
+  如果需要加 https:// 或更多自定义域名，改完 .env 的
+  INVENTREE_SITE_URL 后执行:
+    docker compose down
+    docker compose up -d
+  （init-csrf 会在启动时自动更新 config.yaml）
+
+  Q4: "不是内部或外部命令" 疯狂刷屏
+  ----------------------------------------------------------------
+  你跑了旧版 setup.bat 或用 PowerShell 跑了 bash 命令
+
+  处理: 用 cmd（Win+R → cmd），cd 到本文件夹，按本文件的 Step 手动跑
+        不要用 PowerShell！
+
+  Q5: invoke update 报 SystemError: buffer overflow
+  ----------------------------------------------------------------
+  这是 Python 3.14 的已知 bug，invoke 库还没适配
+
+  处理: 不要跑 invoke update！直接用本文件 Step 3 的 manage.py 命令
+
+  Q6: 钉钉没收到消息
+  ----------------------------------------------------------------
+  1) .env 里 DINGTALK_WEBHOOK / DINGTALK_SECRET 不为空？
+  2) 改完 .env 跑了 docker compose up -d --force-recreate 吗？
+  3) 手动测试:
+     docker exec inventree-server python /home/inventree/data/scripts/check_and_notify.py --scan
+     看输出是"发送成功"还是报错
+  4) 查钉钉机器人日志: 钉钉群 → 群设置 → 智能群助手 → 机器人 → 日志
+     看请求有没有到达，返回什么错误码
+  5) 容器能上网吗？
+     docker exec inventree-server curl -s https://oapi.dingtalk.com/
+
+  Q7: 换电脑重新部署
+  ----------------------------------------------------------------
+  1) 整个文件夹复制过去
+  2) 装 Docker Desktop，内存调 4GB+
+  3) 改 .env 里的 4 项
+  4) 按本文件 Step 0-8 重新跑
+
+  Q8: 浏览器打开 /web 显示 "INVE-E1 - No frontend included"
+  ----------------------------------------------------------------
+  根因: Caddyfile 里手动分了 /static 和 /media 的 file_server，
+        但路径和 Django collectstatic 的目标不匹配，
+        导致前端 JS bundle 加载不到 → InvenTree 显示 INVE-E1
+
+  修复（最简方案）:
+    1) 打开本文件夹 Caddyfile，确保只有:
+
+       :80 {
+           encode gzip
+           request_body { max_size 100MB }
+           reverse_proxy http://inventree-server:8000
+       }
+
+       （不要有 handle_path /static 或 handle_path /media 的 file_server）
+
+    2) 重启 proxy:
+       docker compose restart inventree-proxy
+
+    InvenTree 内置 whitenoise 中间件，Django/gunicorn 能直接 serve
+    /static /media 等所有静态资源，不需要 Caddy 帮忙分。
+
+  注意: 数据库数据在 Docker named volume 里，不会跟着文件夹走
+        要迁移数据: 旧电脑后台 → 系统 → 数据导入导出 → 备份
+                     新电脑后台 → 系统 → 数据导入导出 → 导入
+
+
+================================================================
+  本文件夹文件清单
+================================================================
+
+  .env                     ← ★ 部署前改 4 项（最关键）
+  docker-compose.yml       ← 编排 5 个容器，别动
+  Caddyfile                ← 反向代理，别动
+  安装.txt                 ← 本文件（手动命令清单）
+  配置说明.txt             ← 详细排障/维护说明
+
+  plugins/
+    inventree_dingtalk/
+      __init__.py              ← 插件入口
+      InvenTreeDingTalk.py     ← 事件监听 → 推钉钉
+
+  scripts/
+    check_and_notify.py        ← 定时批量扫描 → 推钉钉
+
+  setup.bat                ← 自动版（首次部署后用它方便）
+
+
+================================================================

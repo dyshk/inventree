@@ -1,0 +1,17 @@
+# ============================================================
+# Caddy 反向代理配置（最简版，确保前端能加载）
+#
+# 所有请求都反代到 Django/gunicorn
+# InvenTree 内置 whitenoise 中间件，能直接处理 /static /media
+# 不再手动分 file_server，避免路径不匹配导致 INVE-E1
+# ============================================================
+
+:80 {
+    encode gzip
+
+    request_body {
+        max_size 100MB
+    }
+
+    reverse_proxy http://inventree-server:8000
+}
