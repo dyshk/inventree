@@ -91,7 +91,7 @@
 | Step | 操作 | 命令 |
 |:-----|:-----|:-----|
 | 0 | 改 .env 4 项 | 见配置文件说明 |
-| 1 | 清理旧环境 | `docker compose down -v` |
+| 1 | 清理旧环境（会删除存在的所有容器和卷） | `docker compose down -v` |
 | 2 | 启动 db + cache | `docker compose up -d inventree-db inventree-cache` |
 | 3 | 数据库迁移 | `docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && python3 manage.py migrate --run-syncdb --traceback"` |
 | 4 | 收集静态 | `docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && python3 manage.py remove_stale_contenttypes --include-stale-apps --no-input 2>/dev/null; python3 manage.py collectstatic --noinput"` |
