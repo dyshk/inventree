@@ -98,8 +98,8 @@
 | 5 | 创建管理员 | `docker compose run --rm inventree-server bash -lc "cd /home/inventree/src/backend/InvenTree && DJANGO_SUPERUSER_PASSWORD=$INVENTREE_ADMIN_PASSWORD python3 manage.py createsuperuser --noinput --username=$INVENTREE_ADMIN_USER --email=$INVENTREE_ADMIN_EMAIL"` |
 | 6 | 启动 server<br>清一下 __pycache__ 避免旧代码缓存 |命令1 `docker compose up -d inventree-server`<br>命令2`docker exec inventree-server rm -rf /home/inventree/data/plugins/inventree_dingtalk/__pycache__` |
 | 7 | 启动全部 | `docker compose restart inventree-server inventree-worker` |
-| 8 | 验证 | 浏览器访问： http://localhost |
-
+| 8 | 确保后台5个容器都启动，验证是否成功 | 浏览器访问： http://localhost |
+| 9 | 不能访问者重启后台容器 |命令1 `docker compose stop`<br>命令2`docker compose up -d` |
 重要：不要跑 docker compose run --rm inventree-server invoke update！
 
 InvenTree stable 镜像内置 Python 3.14，invoke 库在 3.14 下有 fcntl.ioctl buffer overflow bug，会报 SystemError: buffer overflow。本项目用 manage.py 直接迁移已绕过此问题。
